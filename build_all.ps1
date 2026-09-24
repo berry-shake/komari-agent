@@ -14,7 +14,8 @@ $buildDir = Join-Path -Path (Get-Location) -ChildPath 'build'
 New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
 
 # Detect version from git tags or fallback to dev
-$version = (git describe --tags --abbrev=0 2>$null)
+$version = $env:VERSION
+if (-not $version) { $version = (git describe --tags --exact-match --match "*-fork.*" 2>$null) }
 if (-not $version) { $version = 'dev' }
 $version = $version.Trim()
 
@@ -64,6 +65,7 @@ foreach ($goos in $osList) {
 if ($failedBuilds.Count -gt 0) {
     Write-Host "`nThe following builds failed:" -ForegroundColor $Red
     foreach ($b in $failedBuilds) { Write-Host "- $b" -ForegroundColor $Red }
+    exit 1
 }
 else {
     Write-Host "`nAll builds completed successfully." -ForegroundColor $Green

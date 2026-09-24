@@ -8,3 +8,7 @@ build/
 auto-discovery.json
 net_static.json
 config.json
+
+# Local verification and release output
+__pycache__/
+build/

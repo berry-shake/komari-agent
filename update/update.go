@@ -19,8 +19,8 @@ import (
 )
 
 var (
-	CurrentVersion string = "0.0.1"
-	Repo           string = "komari-monitor/komari-agent"
+	CurrentVersion string = "dev"
+	Repo           string = "berry-shake/komari-agent"
 )
 
 const (
@@ -252,7 +252,7 @@ func checkAndUpdateStable(currentSemVer semver.Version, updater *selfupdate.Upda
 		return fmt.Errorf("failed to check for updates: %v", err)
 	}
 
-	if latest.Version.Equals(currentSemVer) {
+	if !needUpdate(currentSemVer, latest.Version) {
 		log.Println("Current version is the latest:", CurrentVersion)
 		return nil
 	}
@@ -318,10 +318,18 @@ func checkAndUpdateSnapshot(updater *selfupdate.Updater) error {
 
 // 检查更新并执行自动更新
 func CheckAndUpdate() error {
-	log.Println("Checking update...")
+	if isContainerAgent() {
+		log.Println("Container agent: update the berry-shake image instead of the running binary.")
+		return nil
+	}
+	if CurrentVersion == "dev" {
+		log.Println("Development build: automatic update is disabled.")
+		return nil
+	}
+	log.Println("Checking update from", Repo)
 
 	http.DefaultClient = dnsresolver.GetHTTPClient(60 * time.Second)
-	updater, err := selfupdate.NewUpdater(selfupdate.Config{})
+	updater, err := selfupdate.NewUpdater(selfupdate.Config{Validator: checksumValidator{}})
 	if err != nil {
 		return fmt.Errorf("failed to create updater: %v", err)
 	}

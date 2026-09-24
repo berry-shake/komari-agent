@@ -199,12 +199,8 @@ function Uninstall-Previous {
         }
     }
 
-    if (Test-Path $AgentPath) {
-        Log-Warning "Removing old binary..."
-        Remove-Item $AgentPath -Force
-    }
+    # The existing binary is replaced only after a verified download.
 }
-Uninstall-Previous
 
 $versionToInstall = ""
 if ($InstallVersion -ne "") {
@@ -212,7 +208,7 @@ if ($InstallVersion -ne "") {
     $versionToInstall = $InstallVersion
 }
 else {
-    $ApiUrl = "https://api.github.com/repos/komari-monitor/komari-agent/releases/latest"
+    $ApiUrl = "https://api.github.com/repos/berry-shake/komari-agent/releases/latest"
     try {
         Log-Step "Fetching latest release version from GitHub API..."
         $release = Invoke-RestMethod -Uri $ApiUrl -UseBasicParsing
@@ -228,19 +224,36 @@ Log-Success "Installing Komari Agent version: $versionToInstall"
 
 # Construct download URL
 $BinaryName = "komari-agent-windows-$arch.exe"
-$DownloadUrl = if ($GitHubProxy) { "$GitHubProxy/https://github.com/komari-monitor/komari-agent/releases/download/$versionToInstall/$BinaryName" } else { "https://github.com/komari-monitor/komari-agent/releases/download/$versionToInstall/$BinaryName" }
+$DownloadUrl = if ($GitHubProxy) { "$GitHubProxy/https://github.com/berry-shake/komari-agent/releases/download/$versionToInstall/$BinaryName" } else { "https://github.com/berry-shake/komari-agent/releases/download/$versionToInstall/$BinaryName" }
 
-# Download and install
+# Download and verify before stopping or removing the existing service.
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-Log-Info "URL: $DownloadUrl"
+$StagedPath = Join-Path $InstallDir (".agent-download-" + [guid]::NewGuid().ToString())
+$ChecksumPath = "$StagedPath.sha256"
 try {
-    Invoke-WebRequest -Uri $DownloadUrl -OutFile $AgentPath -UseBasicParsing
+    Invoke-WebRequest -Uri $DownloadUrl -OutFile $StagedPath -UseBasicParsing -ErrorAction Stop
+    Invoke-WebRequest -Uri "$DownloadUrl.sha256" -OutFile $ChecksumPath -UseBasicParsing -ErrorAction Stop
+    $ExpectedHash = ((Get-Content $ChecksumPath -Raw).Trim() -split '\s+')[0]
+    $ActualHash = (Get-FileHash $StagedPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($ExpectedHash -cnotmatch '^[0-9a-f]{64}$' -or $ExpectedHash -cne $ActualHash -or (Get-Item $StagedPath).Length -eq 0) {
+        throw "Invalid release checksum or checksum mismatch."
+    }
+    if (Test-Path $AgentPath) {
+        $BackupPath = "$AgentPath.backup." + [guid]::NewGuid().ToString()
+        Copy-Item $AgentPath $BackupPath -ErrorAction Stop
+        Log-Info "Previous binary saved to: $BackupPath"
+    }
+    Uninstall-Previous
+    Move-Item $StagedPath $AgentPath -Force -ErrorAction Stop
 }
 catch {
-    Log-Error "Download failed: $_"
+    Log-Error "Installation failed: $_"
     exit 1
 }
-Log-Success "Downloaded and saved to $AgentPath"
+finally {
+    Remove-Item $StagedPath, $ChecksumPath -Force -ErrorAction SilentlyContinue
+}
+Log-Success "Verified binary installed to $AgentPath"
 
 # Register and start service
 Log-Step "Configuring Windows service with nssm..."

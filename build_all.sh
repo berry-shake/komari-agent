@@ -14,7 +14,7 @@ ARCH_LIST=("amd64" "arm64" "386" "arm")
 mkdir -p ./build
 
 # 获取当前版本
-VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "dev")
+VERSION=${VERSION:-$(git describe --tags --exact-match --match '*-fork.*' 2>/dev/null || echo "dev")}
 
 # 初始化失败列表
 FAILED_BUILDS=()
@@ -54,6 +54,7 @@ if [ ${#FAILED_BUILDS[@]} -ne 0 ]; then
   for BUILD in "${FAILED_BUILDS[@]}"; do
     echo -e "${RED}- $BUILD${NC}"
   done
+  exit 1
 else
   echo -e "\n${GREEN}All builds completed successfully.${NC}"
 fi

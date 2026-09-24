@@ -1,63 +1,99 @@
-name: Release Binaries
-
+name: Release
 on:
-  release:
-    types: [published]
-
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing immutable fork tag (1.2.60-fork.N)'
+        required: true
+        type: string
 permissions:
-  contents: write
-
+  contents: read
+concurrency:
+  group: release
+  cancel-in-progress: false
+env:
+  TAG: ${{ inputs.tag }}
 jobs:
-  build-and-attach:
-    if: ${{ !github.event.release.prerelease }}
+  prepare:
+    if: github.repository == 'berry-shake/komari-agent'
     runs-on: ubuntu-latest
-
-    strategy:
-      matrix:
-        exclude:
-          - goos: windows
-            goarch: arm
-          - goos: darwin
-            goarch: 386
-          - goos: darwin
-            goarch: arm
-        goos: [windows, linux, darwin, freebsd]
-        goarch: [amd64, arm64, 386, arm]
-
+    outputs:
+      sha: ${{ steps.prepare.outputs.sha }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/checkout@v4
+        with:
+          ref: mod
+          fetch-depth: 0
+      - id: prepare
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/release.py prepare "$TAG" 1.2.60 berry-shake/komari-agent
+  binaries:
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+      - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-
-      - name: Build binary
+      - run: python3 -m unittest discover -s scripts -p 'test_*.py'
+      - run: go test -short ./...
+      - name: Build all supported platforms
         env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: 0
-          VERSION: ${{ github.event.release.tag_name }}
+          VERSION: ${{ inputs.tag }}
+        run: bash build_all.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-binaries
+          path: build/*
+          if-no-files-found: error
+  publish:
+    needs: [prepare, binaries]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: build
+          merge-multiple: true
+      - run: python3 scripts/release.py checksums build
+      - run: cp build/komari-agent-linux-amd64 build/komari-agent-linux-arm64 .
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish versioned image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ghcr.io/berry-shake/komari-agent:${{ inputs.tag }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/berry-shake/komari-agent
+            org.opencontainers.image.revision=${{ needs.prepare.outputs.sha }}
+            org.opencontainers.image.version=${{ inputs.tag }}
+          provenance: false
+      - name: Verify tag still identifies the built commit
         run: |
-          BINARY_NAME=komari-agent-${{ matrix.goos }}-${{ matrix.goarch }}
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            BINARY_NAME=${BINARY_NAME}.exe
-          elif [ "${{ matrix.goos }}" = "darwin" ]; then
-            # macOS binaries typically do not have a file extension
-            true
-          fi
-            go build -trimpath -ldflags="-X github.com/komari-monitor/komari-agent/update.CurrentVersion=${VERSION}" -o $BINARY_NAME
-
-      - name: Upload binary to release
+          git fetch --depth=1 origin "refs/tags/$TAG"
+          test "$(git rev-parse 'FETCH_HEAD^{commit}')" = "$(git rev-parse HEAD)"
+      - name: Publish complete release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          BINARY_NAME=komari-agent-${{ matrix.goos }}-${{ matrix.goarch }}
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            BINARY_NAME=${BINARY_NAME}.exe
-          elif [ "${{ matrix.goos }}" = "darwin" ]; then
-            true
-          fi
-          gh release upload ${{ github.event.release.tag_name }} $BINARY_NAME --repo ${{ github.repository }}
-        shell: bash
+          gh release create "$TAG" build/* --repo "$GITHUB_komari-agentSITORY" --verify-tag --draft --title "$TAG" --generate-notes
+          gh release edit "$TAG" --repo "$GITHUB_komari-agentSITORY" --draft=false --prerelease=false --latest
+      - name: Promote image latest
+        run: docker buildx imagetools create --tag ghcr.io/berry-shake/komari-agent:latest "ghcr.io/berry-shake/komari-agent:$TAG"

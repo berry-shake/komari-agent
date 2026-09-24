@@ -35,6 +35,42 @@ log_config() {
     echo -e "${CYAN}[CONFIG]${NC} $1"
 }
 
+# Download and validate before touching the installed binary or service.
+# Kept inline so the installer remains usable as a single downloaded script.
+download_verified() (
+    set -e
+    url="$1"
+    destination="$2"
+    staged=$(mktemp "${destination}.download.XXXXXX") || exit 1
+    trap 'rm -f "$staged" "$staged.sha256"' EXIT
+    curl -fsSL --retry 3 --connect-timeout 15 --max-time 300 -o "$staged" "$url" || exit 1
+    curl -fsSL --retry 3 --connect-timeout 15 --max-time 60 -o "$staged.sha256" "${url}.sha256" || exit 1
+    expected=$(awk 'NR == 1 {print $1}' "$staged.sha256")
+    if [[ ! "$expected" =~ ^[0-9a-f]{64}$ ]] || [ ! -s "$staged" ]; then
+        echo "Invalid or missing release checksum/binary: $url" >&2
+        exit 1
+    fi
+    if command -v sha256sum >/dev/null 2>&1; then
+        actual=$(sha256sum "$staged" | awk '{print $1}')
+    elif command -v shasum >/dev/null 2>&1; then
+        actual=$(shasum -a 256 "$staged" | awk '{print $1}')
+    elif command -v sha256 >/dev/null 2>&1; then
+        actual=$(sha256 -q "$staged")
+    else
+        echo "A SHA-256 tool is required (sha256sum, shasum or sha256)." >&2
+        exit 1
+    fi
+    if [ "$actual" != "$expected" ]; then
+        echo "Checksum mismatch: $url" >&2
+        exit 1
+    fi
+    chmod +x "$staged" || exit 1
+    rm -f "$staged.sha256"
+    trap - EXIT
+    printf '%s\n' "$staged"
+)
+
+main() {
 # Default values
 service_name="komari-agent"
 target_dir="/opt/komari"
@@ -179,15 +215,9 @@ uninstall_previous() {
         fi
     fi
     
-    # Remove old binary if it exists
-    if [ -f "$komari_agent_path" ]; then
-        log_info "Removing old binary..."
-        rm -f "$komari_agent_path"
-    fi
+    # The old binary is retained until the verified replacement is ready.
 }
 
-# Uninstall previous installation
-uninstall_previous
 
 install_dependencies() {
     log_step "Checking and installing dependencies..."
@@ -289,6 +319,7 @@ fi
 
 # Construct download URL
 file_name="komari-agent-${os_name}-${arch}"
+if [ "$os_name" = "windows" ]; then file_name="${file_name}.exe"; fi
 if [ "$version_to_install" = "latest" ]; then
     download_path="latest/download"
 else
@@ -297,10 +328,10 @@ fi
 
 if [ -n "$github_proxy" ]; then
     # Use proxy for GitHub releases
-    download_url="${github_proxy}/https://github.com/komari-monitor/komari-agent/releases/${download_path}/${file_name}"
+    download_url="${github_proxy}/https://github.com/berry-shake/komari-agent/releases/${download_path}/${file_name}"
 else
     # Direct access to GitHub releases
-    download_url="https://github.com/komari-monitor/komari-agent/releases/${download_path}/${file_name}"
+    download_url="https://github.com/berry-shake/komari-agent/releases/${download_path}/${file_name}"
 fi
 
 log_step "Creating installation directory: ${GREEN}$target_dir${NC}"
@@ -314,13 +345,26 @@ else
     log_step "Downloading $file_name directly..."
     log_info "URL: ${CYAN}$download_url${NC}"
 fi
-if ! curl -L -o "$komari_agent_path" "$download_url"; then
-    log_error "Download failed"
-    exit 1
+local staged backup
+if ! staged=$(download_verified "$download_url" "$komari_agent_path"); then
+    log_error "Download or checksum verification failed; existing installation is unchanged."
+    return 1
 fi
-
-# Set executable permissions
-chmod +x "$komari_agent_path"
+if [ -f "$komari_agent_path" ]; then
+    backup=$(mktemp "${komari_agent_path}.backup.XXXXXX") || { rm -f "$staged"; return 1; }
+    if ! cp -p "$komari_agent_path" "$backup"; then
+        rm -f "$staged" "$backup"
+        return 1
+    fi
+    log_info "Previous binary saved to: $backup"
+fi
+# Stop/remove the previous service only after both downloads have been verified.
+uninstall_previous
+if ! mv -f "$staged" "$komari_agent_path"; then
+    rm -f "$staged"
+    log_error "Cannot install replacement; previous binary backup: ${backup:-none}"
+    return 1
+fi
 log_success "Komari-agent installed to ${GREEN}$komari_agent_path${NC}"
 
 # Detect init system and configure service
@@ -656,3 +700,9 @@ fi
 log_config "Service: ${GREEN}$service_name${NC}"
 log_config "Arguments: ${GREEN}$komari_args${NC}"
 echo -e "${WHITE}===========================================${NC}"
+
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi
