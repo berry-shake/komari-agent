@@ -3,7 +3,7 @@ package server
 import (
 	"bytes"
 	"encoding/json"
-	"io"
+	"github.com/komari-monitor/komari-agent/utils"
 	"log"
 	"net/http"
 	"strings"
@@ -91,13 +91,13 @@ func tryUploadData(data map[string]interface{}) error {
 }
 
 func tryUploadDataWithProtocol(data map[string]interface{}, protocolVersion int) error {
-	endpoint := strings.TrimSuffix(flags.Endpoint, "/") + "/api/clients/uploadBasicInfo?token=" + flags.Token
+	endpoint := strings.TrimSuffix(flags.Endpoint, "/") + "/api/clients/uploadBasicInfo"
 	payload, err := json.Marshal(data)
 	if err != nil {
 		return err
 	}
 	if protocolVersion >= 2 {
-		endpoint = strings.TrimSuffix(flags.Endpoint, "/") + "/api/clients/v2/rpc?token=" + flags.Token
+		endpoint = strings.TrimSuffix(flags.Endpoint, "/") + "/api/clients/v2/rpc"
 		payload = v2.BuildBasicInfoPayload(data)
 	}
 	body := payload
@@ -114,6 +114,7 @@ func tryUploadDataWithProtocol(data map[string]interface{}, protocolVersion int)
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Client-Token", flags.Token)
 	if compressed {
 		req.Header.Set("Content-Encoding", "gzip")
 	}
@@ -132,7 +133,7 @@ func tryUploadDataWithProtocol(data map[string]interface{}, protocolVersion int)
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := utils.ReadBounded(resp.Body, utils.MaxMessageBytes)
 	if err != nil {
 		return err
 	}

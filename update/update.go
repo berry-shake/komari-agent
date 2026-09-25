@@ -1,11 +1,13 @@
 package update
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -14,8 +16,9 @@ import (
 	"time"
 
 	"github.com/blang/semver"
+	goupdate "github.com/inconshreveable/go-update"
 	"github.com/komari-monitor/komari-agent/dnsresolver"
-	"github.com/rhysd/go-github-selfupdate/selfupdate"
+	"github.com/komari-monitor/komari-agent/utils"
 )
 
 var (
@@ -24,6 +27,16 @@ var (
 	numericTag     = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
 	minimumVersion = semver.MustParse("1.2.4")
 )
+
+type platformRelease struct {
+	Version           semver.Version
+	AssetURL          string
+	ChecksumURL       string
+	AssetByteSize     int
+	ValidationAssetID int64
+	RepoOwner         string
+	RepoName          string
+}
 
 const containerMarkerPath = "/.komari-agent-container"
 
@@ -90,7 +103,7 @@ func selectDistributionRelease(releases []githubRelease) *githubRelease {
 	}
 	return best
 }
-func releaseForPlatform(r *githubRelease, goos, goarch string) (*selfupdate.Release, error) {
+func releaseForPlatform(r *githubRelease, goos, goarch string) (*platformRelease, error) {
 	name := "komari-agent-" + goos + "-" + goarch
 	if goos == "windows" {
 		name += ".exe"
@@ -116,7 +129,7 @@ func releaseForPlatform(r *githubRelease, goos, goarch string) (*selfupdate.Rele
 	if len(ownerRepo) != 2 {
 		return nil, fmt.Errorf("invalid update repository")
 	}
-	return &selfupdate.Release{Version: version, AssetURL: asset.BrowserDownloadURL, AssetByteSize: asset.Size, AssetID: asset.ID, ValidationAssetID: validation.ID, URL: r.HTMLURL, ReleaseNotes: r.Body, Name: r.Name, PublishedAt: &r.PublishedAt, RepoOwner: ownerRepo[0], RepoName: ownerRepo[1]}, nil
+	return &platformRelease{Version: version, AssetURL: asset.BrowserDownloadURL, ChecksumURL: validation.BrowserDownloadURL, AssetByteSize: asset.Size, ValidationAssetID: validation.ID, RepoOwner: ownerRepo[0], RepoName: ownerRepo[1]}, nil
 }
 func CheckAndUpdate() error {
 	if _, err := os.Stat(containerMarkerPath); err == nil {
@@ -135,13 +148,14 @@ func CheckAndUpdate() error {
 		return err
 	}
 	log.Println("Checking update from", Repo, "(numeric distribution)")
-	http.DefaultClient = dnsresolver.GetHTTPClient(60 * time.Second)
+	client := newUpdateClient()
+	defer client.CloseIdleConnections()
 	req, err := http.NewRequest(http.MethodGet, "https://api.github.com/repos/"+Repo+"/releases?per_page=100", nil)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
@@ -166,10 +180,6 @@ func CheckAndUpdate() error {
 		log.Println("Current version is the latest:", CurrentVersion)
 		return nil
 	}
-	updater, err := selfupdate.NewUpdater(selfupdate.Config{Validator: checksumValidator{}})
-	if err != nil {
-		return err
-	}
 	binary, err := os.Executable()
 	if err != nil {
 		return err
@@ -178,10 +188,77 @@ func CheckAndUpdate() error {
 	if err != nil {
 		return err
 	}
-	if err = updater.UpdateTo(latest, binary); err != nil {
+	if err = installRelease(client, latest, binary); err != nil {
 		return fmt.Errorf("update failed: %w", err)
 	}
 	log.Println("Successfully updated to version", latest.Version)
 	os.Exit(42)
 	return nil
+}
+
+const maxUpdateBytes int64 = 128 << 20
+
+func trustedUpdateURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.User != nil || (u.Port() != "" && u.Port() != "443") {
+		return false
+	}
+	switch u.Hostname() {
+	case "github.com", "api.github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com":
+		return true
+	default:
+		return false
+	}
+}
+
+func newUpdateClient() *http.Client {
+	client := dnsresolver.NewSecureHTTPClient(60 * time.Second)
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 || !trustedUpdateURL(req.URL.String()) {
+			return fmt.Errorf("untrusted update redirect")
+		}
+		return nil
+	}
+	return client
+}
+
+func downloadUpdateAsset(client *http.Client, rawURL string, limit int64) ([]byte, error) {
+	if !trustedUpdateURL(rawURL) {
+		return nil, fmt.Errorf("untrusted update asset URL")
+	}
+	response, err := client.Get(rawURL)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("update download returned HTTP %d", response.StatusCode)
+	}
+	if response.ContentLength > limit {
+		return nil, fmt.Errorf("update asset exceeds size limit")
+	}
+	return utils.ReadBounded(response.Body, limit)
+}
+
+// Only raw binaries from our numeric distribution are supported. Avoid archive
+// decoders and their additional attack surface in the generic self-update SDK.
+func installRelease(client *http.Client, release *platformRelease, binaryPath string) error {
+	if release.AssetByteSize <= 0 || int64(release.AssetByteSize) > maxUpdateBytes {
+		return fmt.Errorf("invalid update asset size")
+	}
+	checksum, err := downloadUpdateAsset(client, release.ChecksumURL, 16<<10)
+	if err != nil {
+		return err
+	}
+	binary, err := downloadUpdateAsset(client, release.AssetURL, maxUpdateBytes)
+	if err != nil {
+		return err
+	}
+	if len(binary) != release.AssetByteSize {
+		return fmt.Errorf("update asset size mismatch")
+	}
+	if err := (checksumValidator{}).Validate(binary, checksum); err != nil {
+		return err
+	}
+	return goupdate.Apply(bytes.NewReader(binary), goupdate.Options{TargetPath: binaryPath})
 }

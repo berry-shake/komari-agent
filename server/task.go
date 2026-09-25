@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/komari-monitor/komari-agent/utils"
 	"io"
 	"log"
 	"net"
@@ -120,7 +121,7 @@ func uploadTaskResult(taskID, result string, exitCode int, finishedAt time.Time)
 	}
 
 	jsonData, _ := json.Marshal(payload)
-	endpoint := flags.Endpoint + "/api/clients/task/result?token=" + flags.Token
+	endpoint := flags.Endpoint + "/api/clients/task/result"
 
 	client := dnsresolver.GetHTTPClient(30 * time.Second)
 	maxRetry := flags.MaxRetries
@@ -131,6 +132,7 @@ func uploadTaskResult(taskID, result string, exitCode int, finishedAt time.Time)
 			return
 		}
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Client-Token", flags.Token)
 		if flags.CFAccessClientID != "" && flags.CFAccessClientSecret != "" {
 			req.Header.Set("CF-Access-Client-Id", flags.CFAccessClientID)
 			req.Header.Set("CF-Access-Client-Secret", flags.CFAccessClientSecret)
@@ -367,7 +369,7 @@ func postV2RPC(payload interface{}) error {
 	if err != nil {
 		return err
 	}
-	endpoint := strings.TrimSuffix(flags.Endpoint, "/") + "/api/clients/v2/rpc?token=" + flags.Token
+	endpoint := strings.TrimSuffix(flags.Endpoint, "/") + "/api/clients/v2/rpc"
 	compressed := false
 	if !flags.DisableCompression {
 		if gz, err := gzipBytes(body); err == nil {
@@ -380,6 +382,7 @@ func postV2RPC(payload interface{}) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Client-Token", flags.Token)
 	if compressed {
 		req.Header.Set("Content-Encoding", "gzip")
 	}
@@ -394,7 +397,7 @@ func postV2RPC(payload interface{}) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := utils.ReadBounded(resp.Body, utils.MaxMessageBytes)
 		return &httpStatusError{StatusCode: resp.StatusCode, Status: resp.Status, Body: string(body)}
 	}
 	_, _ = io.Copy(io.Discard, resp.Body)

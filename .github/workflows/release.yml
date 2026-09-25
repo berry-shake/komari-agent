@@ -41,6 +41,11 @@ jobs:
           cache-dependency-path: go.sum
       - run: python3 -m unittest discover -s scripts -p 'test_*.py'
       - run: go test -short ./...
+      - run: go test -race -short ./server ./update ./utils ./ws
+      - name: Scan reachable Go vulnerabilities
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+          govulncheck ./...
       - name: Build all supported platforms
         env:
           VERSION: ${{ inputs.tag }}

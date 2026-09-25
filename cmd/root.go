@@ -2,10 +2,8 @@ package cmd
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"log"
-	"net/http"
 	"os"
 	"os/signal"
 	"reflect"
@@ -18,6 +16,7 @@ import (
 	monitoring "github.com/komari-monitor/komari-agent/monitoring/unit"
 	"github.com/komari-monitor/komari-agent/server"
 	"github.com/komari-monitor/komari-agent/update"
+	"github.com/komari-monitor/komari-agent/utils"
 	"github.com/spf13/cobra"
 
 	pkg_flags "github.com/komari-monitor/komari-agent/cmd/flags"
@@ -30,6 +29,7 @@ var RootCmd = &cobra.Command{
 	Short: "komari agent",
 	Long:  `komari agent`,
 	Run: func(cmd *cobra.Command, args []string) {
+		log.SetOutput(utils.NewRedactingWriter(log.Writer(), func() []string { return []string{flags.Token, flags.AutoDiscoveryKey, flags.CFAccessClientSecret} }))
 		loadFromEnv() // 从环境变量加载配置，覆盖解析
 		if flags.ConfigFile != "" {
 			bytes, err := os.ReadFile(flags.ConfigFile)
@@ -111,10 +111,6 @@ var RootCmd = &cobra.Command{
 		}
 		log.Println("Monitoring Interfaces:", interfaceList)
 
-		// 忽略不安全的证书
-		if flags.IgnoreUnsafeCert {
-			http.DefaultTransport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
-		}
 		// 自动更新
 		if !flags.DisableAutoUpdate {
 			err := update.CheckAndUpdate()

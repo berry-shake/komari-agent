@@ -6,10 +6,10 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"math"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -157,9 +157,9 @@ func EstablishWebSocketConnection() {
 }
 
 func buildWebSocketEndpoint(protocolVersion int) string {
-	path := "/api/clients/report?token=" + flags.Token
+	path := "/api/clients/report"
 	if protocolVersion >= 2 {
-		path = "/api/clients/v2/rpc?token=" + flags.Token
+		path = "/api/clients/v2/rpc"
 	}
 	websocketEndpoint := strings.TrimSuffix(flags.Endpoint, "/") + path
 	websocketEndpoint = "ws" + strings.TrimPrefix(websocketEndpoint, "http")
@@ -252,7 +252,7 @@ func postV2Request(payload []byte) (*v2.Response, error) {
 }
 
 func postV2RequestContext(ctx context.Context, payload []byte) (*v2.Response, error) {
-	endpoint := strings.TrimSuffix(flags.Endpoint, "/") + "/api/clients/v2/rpc?token=" + flags.Token
+	endpoint := strings.TrimSuffix(flags.Endpoint, "/") + "/api/clients/v2/rpc"
 	body := payload
 	compressed := false
 	if !flags.DisableCompression {
@@ -266,6 +266,7 @@ func postV2RequestContext(ctx context.Context, payload []byte) (*v2.Response, er
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Client-Token", flags.Token)
 	if compressed {
 		req.Header.Set("Content-Encoding", "gzip")
 	}
@@ -279,7 +280,7 @@ func postV2RequestContext(ctx context.Context, payload []byte) (*v2.Response, er
 		return nil, err
 	}
 	defer resp.Body.Close()
-	bytesBody, err := io.ReadAll(resp.Body)
+	bytesBody, err := utils.ReadBounded(resp.Body, utils.MaxMessageBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -370,6 +371,7 @@ func connectWebSocket(websocketEndpoint string) (*ws.SafeConn, error) {
 		return nil, err
 	}
 
+	conn.SetReadLimit(utils.MaxMessageBytes)
 	return ws.NewSafeConn(conn), nil
 }
 
@@ -472,7 +474,7 @@ func processV2Event(conn *ws.SafeConn, method string, params interface{}, eventI
 
 // establishTerminalConnection 建立终端连接并使用terminal包处理终端操作
 func establishTerminalConnection(token, id, endpoint string) {
-	endpoint = strings.TrimSuffix(endpoint, "/") + "/api/clients/terminal?token=" + token + "&id=" + id
+	endpoint = strings.TrimSuffix(endpoint, "/") + "/api/clients/terminal?id=" + url.QueryEscape(id)
 	endpoint = "ws" + strings.TrimPrefix(endpoint, "http")
 
 	// 转换中文域名为 ASCII 兼容编码
@@ -486,6 +488,7 @@ func establishTerminalConnection(token, id, endpoint string) {
 	dialer := newWSDialer()
 
 	headers := newWSHeaders()
+	headers.Set("X-Client-Token", token)
 
 	conn, _, err := dialer.Dial(endpoint, headers)
 	if err != nil {
@@ -494,6 +497,7 @@ func establishTerminalConnection(token, id, endpoint string) {
 	}
 
 	// 启动终端
+	conn.SetReadLimit(utils.MaxMessageBytes)
 	terminal.StartTerminal(conn)
 	if conn != nil {
 		conn.Close()
@@ -517,6 +521,7 @@ func newWSDialer() *websocket.Dialer {
 // newWSHeaders 统一构造 WS 请求头（含 Cloudflare Access 头）
 func newWSHeaders() http.Header {
 	headers := http.Header{}
+	headers.Set("X-Client-Token", flags.Token)
 	if flags.CFAccessClientID != "" && flags.CFAccessClientSecret != "" {
 		headers.Set("CF-Access-Client-Id", flags.CFAccessClientID)
 		headers.Set("CF-Access-Client-Secret", flags.CFAccessClientSecret)

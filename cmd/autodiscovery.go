@@ -59,9 +59,17 @@ func loadAutoDiscoveryConfig() (*AutoDiscoveryConfig, error) {
 	}
 
 	// 读取文件内容
-	data, err := os.ReadFile(configPath)
+	file, err := os.Open(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read auto-discovery config: %v", err)
+	}
+	defer file.Close()
+	if err := utils.ProtectCredentialFile(configPath); err != nil {
+		return nil, fmt.Errorf("failed to protect auto-discovery config: %w", err)
+	}
+	data, err := utils.ReadBounded(file, 64<<10)
+	if err != nil {
+		return nil, err
 	}
 
 	// 解析JSON
@@ -84,7 +92,7 @@ func saveAutoDiscoveryConfig(config *AutoDiscoveryConfig) error {
 	}
 
 	// 写入文件
-	if err := os.WriteFile(configPath, data, 0644); err != nil {
+	if err := utils.WritePrivateFile(configPath, data); err != nil {
 		return fmt.Errorf("failed to write auto-discovery config: %v", err)
 	}
 

@@ -196,6 +196,15 @@ func GetHTTPClient(timeout time.Duration) *http.Client {
 	return client
 }
 
+// NewSecureHTTPClient never inherits the panel's certificate exception or a
+// process-global transport that another component may have modified.
+func NewSecureHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Transport: buildTransport(timeout, &tls.Config{MinVersion: tls.VersionTLS12}),
+		Timeout:   timeout,
+	}
+}
+
 // GetNetDialer 返回一个使用自定义DNS解析器的网络拨号器
 func GetNetDialer(timeout time.Duration) *net.Dialer {
 	if timeout <= 0 {
