@@ -15,9 +15,13 @@ New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
 
 # Detect version from git tags or fallback to dev
 $version = $env:VERSION
-if (-not $version) { $version = (git describe --tags --exact-match --match "*-fork.*" 2>$null) }
+if (-not $version) { $version = (git describe --tags --exact-match --match "[0-9]*.[0-9]*.[0-9]*" --exclude "*-*" --exclude "*+*" 2>$null) }
 if (-not $version) { $version = 'dev' }
 $version = $version.Trim()
+if ($version -ne 'dev' -and $version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+    Write-Error 'Expected a numeric VERSION such as 1.2.4'
+    exit 1
+}
 
 # Check go exists
 if (-not (Get-Command go -ErrorAction SilentlyContinue)) {

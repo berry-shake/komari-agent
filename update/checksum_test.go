@@ -7,7 +7,7 @@ import (
 )
 
 func TestReleaseChecksum(t *testing.T) {
-	binary := []byte("fork binary fixture")
+	binary := []byte("release binary fixture")
 	checksum := []byte(fmt.Sprintf("%x\n", sha256.Sum256(binary)))
 	validator := checksumValidator{}
 	if err := validator.Validate(binary, checksum); err != nil {
@@ -23,10 +23,10 @@ func TestReleaseChecksum(t *testing.T) {
 	}
 }
 
-func TestForkRevisions(t *testing.T) {
+func TestNumericRevisions(t *testing.T) {
 	for _, pair := range [][2]string{
-		{"1.2.60-fork.1", "1.2.60-fork.2"},
-		{"1.2.60-fork.9", "1.2.60-fork.10"},
+		{"1.2.4", "1.2.5"},
+		{"1.2.9", "1.2.10"},
 	} {
 		current, err := parseVersion(pair[0])
 		if err != nil {

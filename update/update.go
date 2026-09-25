@@ -21,7 +21,8 @@ import (
 var (
 	CurrentVersion = "dev"
 	Repo           = "berry-shake/komari-agent"
-	maintenanceTag = regexp.MustCompile(`^1\.2\.13-fork\.[1-9][0-9]*$`)
+	numericTag     = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
+	minimumVersion = semver.MustParse("1.2.4")
 )
 
 const containerMarkerPath = "/.komari-agent-container"
@@ -57,13 +58,21 @@ func DoUpdateWorks() {
 	}
 }
 
-// Only this maintenance line is eligible. Retained newer baselines are rollback
-// artifacts and must never pull a single-database deployment forward again.
-func selectMaintenanceRelease(releases []githubRelease) *githubRelease {
+// Version numbers belong to our distribution, independently of the upstream
+// Agent baseline. Legacy fork tags are never considered upgrade candidates.
+func isDistributionVersion(tag string) bool {
+	if !numericTag.MatchString(tag) {
+		return false
+	}
+	version, err := parseVersion(tag)
+	return err == nil && version.Compare(minimumVersion) >= 0
+}
+
+func selectDistributionRelease(releases []githubRelease) *githubRelease {
 	var best *githubRelease
 	for i := range releases {
 		r := &releases[i]
-		if r.Draft || r.Prerelease || !maintenanceTag.MatchString(r.TagName) {
+		if r.Draft || r.Prerelease || !isDistributionVersion(r.TagName) {
 			continue
 		}
 		version, err := parseVersion(r.TagName)
@@ -118,14 +127,14 @@ func CheckAndUpdate() error {
 		log.Println("Development build: automatic update is disabled.")
 		return nil
 	}
-	if !maintenanceTag.MatchString(CurrentVersion) {
-		return fmt.Errorf("version %q is outside the 1.2.13 fork maintenance line", CurrentVersion)
+	if !isDistributionVersion(CurrentVersion) {
+		return fmt.Errorf("version %q is outside the numeric distribution; install version 1.2.4 or later explicitly", CurrentVersion)
 	}
 	current, err := parseVersion(CurrentVersion)
 	if err != nil {
 		return err
 	}
-	log.Println("Checking update from", Repo, "(1.2.13 fork maintenance line)")
+	log.Println("Checking update from", Repo, "(numeric distribution)")
 	http.DefaultClient = dnsresolver.GetHTTPClient(60 * time.Second)
 	req, err := http.NewRequest(http.MethodGet, "https://api.github.com/repos/"+Repo+"/releases?per_page=100", nil)
 	if err != nil {
@@ -144,9 +153,9 @@ func CheckAndUpdate() error {
 	if err = json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&releases); err != nil {
 		return err
 	}
-	selected := selectMaintenanceRelease(releases)
+	selected := selectDistributionRelease(releases)
 	if selected == nil {
-		log.Println("No published release in the 1.2.13 fork maintenance line")
+		log.Println("No published numeric distribution release")
 		return nil
 	}
 	latest, err := releaseForPlatform(selected, runtime.GOOS, runtime.GOARCH)

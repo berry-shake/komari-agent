@@ -14,7 +14,12 @@ ARCH_LIST=("amd64" "arm64" "386" "arm")
 mkdir -p ./build
 
 # 获取当前版本
-VERSION=${VERSION:-$(git describe --tags --exact-match --match '*-fork.*' 2>/dev/null || echo "dev")}
+VERSION=${VERSION:-$(git describe --tags --exact-match --match '[0-9]*.[0-9]*.[0-9]*' --exclude '*-*' --exclude '*+*' 2>/dev/null || echo "dev")}
+
+if [[ "$VERSION" != dev && ! "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+    echo "Expected a numeric VERSION such as 1.2.4" >&2
+    exit 1
+fi
 
 # 初始化失败列表
 FAILED_BUILDS=()
