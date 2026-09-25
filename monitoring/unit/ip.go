@@ -53,7 +53,7 @@ func GetIPv4Address() (string, error) {
 		"https://www.toutiao.com/stream/widget/local_weather/data/",
 		"https://edge-ip.html.zone/geo",
 		"https://vercel-ip.html.zone/geo",
-		"http://ipv4.ip.sb",
+		"https://ipv4.ip.sb",
 		"https://api.ipify.org?format=json",
 	}
 
@@ -68,7 +68,7 @@ func GetIPv4Address() (string, error) {
 		if err != nil {
 			continue
 		}
-		body, err := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		_ = resp.Body.Close() // 获取后立即关闭防止堵塞
 		if err != nil {
 			continue
@@ -89,7 +89,7 @@ func GetIPv6Address() (string, error) {
 		"https://v6.ip.zxinc.org/info.php?type=json",
 		"https://api6.ipify.org?format=json",
 		"https://ipv6.icanhazip.com",
-		"http://api-ipv6.ip.sb/geoip",
+		"https://api-ipv6.ip.sb/geoip",
 	}
 
 	for _, api := range webAPIs {
@@ -103,7 +103,7 @@ func GetIPv6Address() (string, error) {
 		if err != nil {
 			continue
 		}
-		body, err := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		_ = resp.Body.Close() // 获取后立即关闭防止堵塞
 		if err != nil {
 			continue

@@ -50,3 +50,7 @@ gh -R berry-shake/REPOSITORY workflow run release.yml --ref mod -f tag=1.2.4
 ## 本地验证
 
 使用 go.mod 声明的 Go 工具链、Node.js 24、Python 3.11+、C 编译器。前端 npm ci/test/build；服务端 scripts/build-frontend.sh、Python 脚本测试、go test -short ./... 和 DDNS/API race 测试；Agent 执行 Go/Python 测试、更新逻辑 race 测试及发布矩阵构建。正式 Linux amd64/arm64 镜像需验证 Agent 上报、延迟检测、单库持久化和日志分页后交付。未注入版本的开发构建显示 dev。
+
+## 1.2.7
+
+远程命令限制为 4 个并行、10 分钟、每个输出流 64 KiB，终端 4 个并行，探测 64 个并行。新安装器使用私有 agent-config.json（POSIX 0600 / Windows 受限 ACL），运行参数不再携带 token；已安装服务不会被自更新自动改写。二进制代理下载的摘要仍从 GitHub 直取。Windows NSSM 2.24 校验官方归档固定 SHA-256。`--write-config` 仅导出配置并退出，不连接面板。其余兼容性说明见 [服务端 1.2.7 安全说明](https://github.com/berry-shake/komari/blob/mod/docs/SECURITY-1.2.7.md)。

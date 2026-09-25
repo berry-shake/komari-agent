@@ -35,23 +35,34 @@ func NewTask(task_id, command string) {
 		uploadTaskResult(task_id, "Remote control is disabled.", -1, time.Now())
 		return
 	}
-	log.Printf("Executing task %s with command: %s", task_id, command)
+	log.Printf("Executing task %s", task_id)
 	result, exitCode := runTaskCommand(command)
 	uploadTaskResult(task_id, result, exitCode, time.Now())
 }
 
 func runTaskCommand(command string) (string, int) {
-	cmd, cleanup, err := buildTaskCommand(command)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	return runTaskCommandContext(ctx, command)
+}
+
+func runTaskCommandContext(ctx context.Context, command string) (string, int) {
+	cmd, cleanup, err := buildTaskCommandContext(ctx, command)
 	if err != nil {
 		return err.Error(), -1
 	}
 	defer cleanup()
 
-	var stdout, stderr bytes.Buffer
+	var stdout, stderr limitedOutput
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
+	containTask(cmd)
+	cmd.WaitDelay = 2 * time.Second
 	err = cmd.Run()
+	if ctx.Err() != nil {
+		err = ctx.Err()
+	}
 
 	result := stdout.String()
 	if stderr.Len() > 0 {
@@ -72,6 +83,10 @@ func runTaskCommand(command string) (string, int) {
 }
 
 func buildTaskCommand(command string) (*exec.Cmd, func(), error) {
+	return buildTaskCommandContext(context.Background(), command)
+}
+
+func buildTaskCommandContext(ctx context.Context, command string) (*exec.Cmd, func(), error) {
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
 		scriptFile, err := os.CreateTemp("", "komari-task-*.ps1")
@@ -96,10 +111,10 @@ func buildTaskCommand(command string) (*exec.Cmd, func(), error) {
 			cleanup()
 			return nil, func() {}, err
 		}
-		cmd = exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptFile.Name())
+		cmd = exec.CommandContext(ctx, "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptFile.Name())
 		return cmd, cleanup, nil
 	} else {
-		cmd = exec.Command("sh", "-s")
+		cmd = exec.CommandContext(ctx, "sh", "-s")
 		cmd.Stdin = strings.NewReader(command)
 	}
 	return cmd, func() {}, nil

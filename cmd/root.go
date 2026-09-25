@@ -23,6 +23,7 @@ import (
 )
 
 var flags = pkg_flags.GlobalConfig
+var writeConfig string
 
 var RootCmd = &cobra.Command{
 	Use:   "komari-agent",
@@ -40,6 +41,20 @@ var RootCmd = &cobra.Command{
 			if err != nil {
 				log.Fatalf("Failed to parse config file: %v", err)
 			}
+		}
+		if writeConfig != "" {
+			flags.ConfigFile = ""
+			data, err := json.MarshalIndent(flags, "", "  ")
+			if err != nil {
+				log.Fatal("Unable to encode configuration")
+			}
+			if err := utils.WritePrivateFile(writeConfig, data); err != nil {
+				log.Fatalf("Unable to save configuration: %v", err)
+			}
+			return
+		}
+		if strings.HasPrefix(flags.Endpoint, "http://") || flags.IgnoreUnsafeCert {
+			log.Println("WARNING: panel transport is not protected by verified HTTPS")
 		}
 		if flags.ProtocolVersion == 0 {
 			flags.ProtocolVersion = 2
@@ -144,10 +159,12 @@ func Execute() {
 
 	if err := RootCmd.Execute(); err != nil {
 		log.Println(err)
+		os.Exit(1)
 	}
 }
 
 func init() {
+	RootCmd.PersistentFlags().StringVar(&writeConfig, "write-config", "", "Write parsed configuration to a private file and exit")
 	RootCmd.PersistentFlags().StringVarP(&flags.Token, "token", "t", "", "API token")
 	//RootCmd.MarkPersistentFlagRequired("token")
 	RootCmd.PersistentFlags().StringVarP(&flags.Endpoint, "endpoint", "e", "", "API endpoint")

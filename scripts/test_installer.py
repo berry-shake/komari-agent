@@ -20,9 +20,10 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith('/missing'):
             self.send_error(404)
             return
-        payload = BINARY
+        binary = b"proxy replacement" if self.path.startswith("/proxy") else BINARY
+        payload = binary
         if self.path.endswith('.sha256'):
-            payload = (hashlib.sha256(BINARY).hexdigest() + '\n').encode()
+            payload = (hashlib.sha256(binary).hexdigest() + '\n').encode()
             if self.path.startswith('/corrupt'):
                 payload = b'0' * 64
             if self.path.startswith('/invalid'):
@@ -66,3 +67,12 @@ class InstallerTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(target.read_bytes(), b'previous version')
                 self.assertEqual(list(Path(temp).iterdir()), [target])
+
+    def test_proxy_cannot_replace_binary_and_its_checksum(self):
+        with tempfile.TemporaryDirectory() as temp:
+            target = Path(temp) / 'agent'
+            target.write_bytes(b'previous version')
+            result = subprocess.run(['bash', '-c', 'source "$1"; download_verified "$2" "$3" "$4"', '_', str(INSTALLER), self.url + '/proxy', str(target), self.url + '/good.sha256'], capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(target.read_bytes(), b'previous version')
+            self.assertEqual(list(Path(temp).iterdir()), [target])

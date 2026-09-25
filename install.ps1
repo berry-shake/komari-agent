@@ -26,6 +26,8 @@ for ($i = 0; $i -lt $args.Count; $i++) {
     }
 }
 
+if ($ServiceName -notmatch '^[a-zA-Z0-9][a-zA-Z0-9_.-]*$' -or $InstallDir -match '["\r\n]') { throw "Invalid service name or installation directory" }
+
 # Ensure running as Administrator
 if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
     ).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)) {
@@ -91,13 +93,16 @@ if (-not $nssmCmd) {
     Log-Info "nssm not found or not usable. Attempting to download to $InstallDir..."
     $NssmVersion = "2.24"
     $NssmZipUrl = "https://nssm.cc/release/nssm-$NssmVersion.zip"
-    $TempNssmZipPath = Join-Path $env:TEMP "nssm-$NssmVersion.zip"
-    $TempExtractDir = Join-Path $env:TEMP "nssm_extract_temp"
+    $TempNssmZipPath = Join-Path $env:TEMP ("nssm-" + [guid]::NewGuid().ToString() + ".zip")
+    $TempExtractDir = Join-Path $env:TEMP ("nssm-" + [guid]::NewGuid().ToString())
 
     try {
         Log-Info "Downloading nssm from $NssmZipUrl..."
         Invoke-WebRequest -Uri $NssmZipUrl -OutFile $TempNssmZipPath -UseBasicParsing
 
+        # Pinned official nssm.cc 2.24 archive, verified during release review.
+        $NssmSha256 = "727d1e42275c605e0f04aba98095c38a8e1e46def453cdffce42869428aa6743"
+        if ((Get-FileHash $TempNssmZipPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $NssmSha256) { throw "NSSM checksum mismatch" }
         if (Test-Path $TempExtractDir) { Remove-Item -Recurse -Force $TempExtractDir }
         New-Item -ItemType Directory -Path $TempExtractDir -Force | Out-Null
         Expand-Archive -Path $TempNssmZipPath -DestinationPath $TempExtractDir -Force
@@ -228,22 +233,26 @@ $DownloadUrl = if ($GitHubProxy) { "$GitHubProxy/https://github.com/berry-shake/
 
 # Download and verify before stopping or removing the existing service.
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-$StagedPath = Join-Path $InstallDir (".agent-download-" + [guid]::NewGuid().ToString())
+$StagedPath = Join-Path $InstallDir (".agent-download-" + [guid]::NewGuid().ToString() + ".exe")
 $ChecksumPath = "$StagedPath.sha256"
 try {
     Invoke-WebRequest -Uri $DownloadUrl -OutFile $StagedPath -UseBasicParsing -ErrorAction Stop
-    Invoke-WebRequest -Uri "$DownloadUrl.sha256" -OutFile $ChecksumPath -UseBasicParsing -ErrorAction Stop
+    Invoke-WebRequest -Uri "https://github.com/berry-shake/komari-agent/releases/download/$versionToInstall/$BinaryName.sha256" -OutFile $ChecksumPath -UseBasicParsing -ErrorAction Stop
     $ExpectedHash = ((Get-Content $ChecksumPath -Raw).Trim() -split '\s+')[0]
     $ActualHash = (Get-FileHash $StagedPath -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($ExpectedHash -cnotmatch '^[0-9a-f]{64}$' -or $ExpectedHash -cne $ActualHash -or (Get-Item $StagedPath).Length -eq 0) {
         throw "Invalid release checksum or checksum mismatch."
     }
+    $ConfigStage = Join-Path $InstallDir (".agent-config-" + [guid]::NewGuid().ToString())
+    & $StagedPath @KomariArgs --write-config $ConfigStage
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $ConfigStage)) { throw "Unable to prepare private configuration (requires Agent 1.2.7 or newer)." }
     if (Test-Path $AgentPath) {
         $BackupPath = "$AgentPath.backup." + [guid]::NewGuid().ToString()
         Copy-Item $AgentPath $BackupPath -ErrorAction Stop
         Log-Info "Previous binary saved to: $BackupPath"
     }
     Uninstall-Previous
+    Move-Item $ConfigStage (Join-Path $InstallDir "agent-config.json") -Force -ErrorAction Stop
     Move-Item $StagedPath $AgentPath -Force -ErrorAction Stop
 }
 catch {
@@ -257,7 +266,7 @@ Log-Success "Verified binary installed to $AgentPath"
 
 # Register and start service
 Log-Step "Configuring Windows service with nssm..."
-$argString = $KomariArgs -join ' '
+$argString = '--config "' + (Join-Path $InstallDir "agent-config.json") + '"'
 # Ensure InstallDir and AgentPath are quoted if they contain spaces
 $quotedAgentPath = "`"$AgentPath`""
 nssm install $ServiceName $quotedAgentPath $argString

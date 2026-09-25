@@ -40,7 +40,7 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
       - name: Check Windows credentials and updater
-        run: go test -short ./utils ./update
+        run: go test -short ./utils ./update ./server
       - name: Validate PowerShell syntax
         shell: pwsh
         run: |

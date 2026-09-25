@@ -409,15 +409,15 @@ func handleWebSocketMessages(conn *ws.SafeConn, protocolVersion int, done chan<-
 		}
 
 		if message.Message == "terminal" || message.TerminalId != "" {
-			go establishTerminalConnection(flags.Token, message.TerminalId, flags.Endpoint)
+			launchBounded(terminalSlots, func() { establishTerminalConnection(flags.Token, message.TerminalId, flags.Endpoint) })
 			continue
 		}
 		if message.Message == "exec" {
-			go NewTask(message.ExecTaskID, message.ExecCommand)
+			launchBounded(commandSlots, func() { NewTask(message.ExecTaskID, message.ExecCommand) })
 			continue
 		}
 		if message.Message == "ping" || message.PingTaskID != 0 || message.PingType != "" || message.PingTarget != "" {
-			go NewPingTask(conn, protocolVersion, message.PingTaskID, message.PingType, message.PingTarget)
+			launchBounded(pingSlots, func() { NewPingTask(conn, protocolVersion, message.PingTaskID, message.PingType, message.PingTarget) })
 			continue
 		}
 	}
@@ -434,7 +434,7 @@ func processV2Event(conn *ws.SafeConn, method string, params interface{}, eventI
 			Command string `json:"command"`
 		}
 		if err := v2.BindParams(params, &p); err == nil {
-			go NewTask(p.TaskID, p.Command)
+			launchBounded(commandSlots, func() { NewTask(p.TaskID, p.Command) })
 			return true
 		} else {
 			log.Printf("bad v2 exec params: %v", err)
@@ -446,7 +446,7 @@ func processV2Event(conn *ws.SafeConn, method string, params interface{}, eventI
 			Target string `json:"ping_target"`
 		}
 		if err := v2.BindParams(params, &p); err == nil {
-			go NewPingTask(conn, 2, p.TaskID, p.Type, p.Target)
+			launchBounded(pingSlots, func() { NewPingTask(conn, 2, p.TaskID, p.Type, p.Target) })
 			return true
 		} else {
 			log.Printf("bad v2 ping params: %v", err)
@@ -456,7 +456,7 @@ func processV2Event(conn *ws.SafeConn, method string, params interface{}, eventI
 			RequestID string `json:"request_id"`
 		}
 		if err := v2.BindParams(params, &p); err == nil {
-			go establishTerminalConnection(flags.Token, p.RequestID, flags.Endpoint)
+			launchBounded(terminalSlots, func() { establishTerminalConnection(flags.Token, p.RequestID, flags.Endpoint) })
 			return true
 		} else {
 			log.Printf("bad v2 terminal params: %v", err)

@@ -44,7 +44,7 @@ download_verified() (
     staged=$(mktemp "${destination}.download.XXXXXX") || exit 1
     trap 'rm -f "$staged" "$staged.sha256"' EXIT
     curl -fsSL --retry 3 --connect-timeout 15 --max-time 300 -o "$staged" "$url" || exit 1
-    curl -fsSL --retry 3 --connect-timeout 15 --max-time 60 -o "$staged.sha256" "${url}.sha256" || exit 1
+    curl -fsSL --retry 3 --connect-timeout 15 --max-time 60 -o "$staged.sha256" "${3:-${url}.sha256}" || exit 1
     expected=$(awk 'NR == 1 {print $1}' "$staged.sha256")
     if [[ ! "$expected" =~ ^[0-9a-f]{64}$ ]] || [ ! -s "$staged" ]; then
         echo "Invalid or missing release checksum/binary: $url" >&2
@@ -107,8 +107,13 @@ case $os_type in
 esac
 
 # Parse install-specific arguments
+agent_args=()
 komari_args=""
 while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --install-dir|--install-service-name|--install-ghproxy|--install-version)
+            if [ "$#" -lt 2 ] || [ -z "$2" ]; then log_error "Missing install option value"; return 1; fi ;;
+    esac
     case $1 in
         --install-dir)
             target_dir="$2"
@@ -132,14 +137,18 @@ while [[ $# -gt 0 ]]; do
             ;;
         *)
             # Non-install arguments go to komari_args
-            komari_args="$komari_args $1"
+            agent_args+=("$1")
             shift
             ;;
     esac
 done
 
-# Remove leading space from komari_args if present
-komari_args="${komari_args# }"
+# These values enter init-system definitions; reject shell/XML/systemd metacharacters.
+if [[ ! "$service_name" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]] || [[ ! "$target_dir" =~ ^/[a-zA-Z0-9_./-]+$ ]] || [[ "$target_dir" == *".."* ]]; then
+    log_error "Use a simple absolute install directory and an alphanumeric service name."
+    return 1
+fi
+komari_args="--config ${target_dir}/agent-config.json"
 
 komari_agent_path="${target_dir}/agent"
 
@@ -346,8 +355,15 @@ else
     log_info "URL: ${CYAN}$download_url${NC}"
 fi
 local staged backup
-if ! staged=$(download_verified "$download_url" "$komari_agent_path"); then
+if ! staged=$(download_verified "$download_url" "$komari_agent_path" "https://github.com/berry-shake/komari-agent/releases/${download_path}/${file_name}.sha256"); then
     log_error "Download or checksum verification failed; existing installation is unchanged."
+    return 1
+fi
+# Parse arguments with the verified binary, before stopping the old service.
+config_stage=$(mktemp "${target_dir}/.agent-config.XXXXXX") || { rm -f "$staged"; return 1; }
+if ! "$staged" "${agent_args[@]}" --write-config "$config_stage"; then
+    rm -f "$staged" "$config_stage"
+    log_error "Cannot prepare private configuration (requires Agent 1.2.7 or newer)."
     return 1
 fi
 if [ -f "$komari_agent_path" ]; then
@@ -360,6 +376,7 @@ if [ -f "$komari_agent_path" ]; then
 fi
 # Stop/remove the previous service only after both downloads have been verified.
 uninstall_previous
+if ! mv -f "$config_stage" "${target_dir}/agent-config.json"; then rm -f "$staged"; return 1; fi
 if ! mv -f "$staged" "$komari_agent_path"; then
     rm -f "$staged"
     log_error "Cannot install replacement; previous binary backup: ${backup:-none}"
@@ -524,6 +541,7 @@ Type=simple
 ExecStart=${komari_agent_path} ${komari_args}
 WorkingDirectory=${target_dir}
 Restart=always
+UMask=0077
 User=root
 
 [Install]

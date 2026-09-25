@@ -151,7 +151,7 @@ func saveToFileLocked() error {
 		return err
 	}
 	tmp := SaveFilePath + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, SaveFilePath)

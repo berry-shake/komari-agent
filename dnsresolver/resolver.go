@@ -191,6 +191,15 @@ func GetHTTPClient(timeout time.Duration) *http.Client {
 			InsecureSkipVerify: flags.IgnoreUnsafeCert,
 		}),
 		Timeout: timeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return fmt.Errorf("too many redirects")
+			}
+			if req.URL.Scheme != via[0].URL.Scheme || !strings.EqualFold(req.URL.Host, via[0].URL.Host) {
+				return fmt.Errorf("panel redirect changes origin")
+			}
+			return nil
+		},
 	}
 	httpClients[key] = client
 	return client
