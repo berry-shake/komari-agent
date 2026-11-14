@@ -30,8 +30,8 @@ type terminalImpl struct {
 
 // StartTerminal 启动终端并处理 WebSocket 通信
 func StartTerminal(conn *websocket.Conn) {
-	if flags.DisableWebSsh {
-		conn.WriteMessage(websocket.TextMessage, []byte("\n\nWeb SSH is disabled. Enable it by running without the --disable-web-ssh flag."))
+	if !flags.RemoteControlEnabled() {
+		conn.WriteMessage(websocket.TextMessage, []byte("\n\nWeb SSH is disabled. Enable it by running with the --enable-web-ssh flag (and without --disable-web-ssh)."))
 		conn.Close()
 		return
 	}
